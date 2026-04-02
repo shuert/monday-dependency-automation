@@ -54,15 +54,32 @@ async function handleStatusChangedToDone(payload) {
 
 /**
  * Extracts the fields we need from the monday webhook payload.
- * monday sends event data in payload.event for integration triggers.
+ * Supports both formats:
+ *   - Classic webhook: payload.event.boardId / itemId / columnId
+ *   - Workflow block:  payload.payload.inputFields or inboundFieldValues
  */
 function extractPayloadFields(payload) {
+  // Workflow block format (integration recipe system)
+  const inputFields =
+    payload?.payload?.inputFields ||
+    payload?.payload?.inboundFieldValues ||
+    {};
+
+  if (inputFields.boardId || inputFields.itemId) {
+    console.log("Using workflow block payload format");
+    return {
+      boardId: inputFields.boardId,
+      itemId: inputFields.itemId,
+      columnId: inputFields.columnId,
+    };
+  }
+
+  // Classic webhook format
   const event = payload?.event || payload;
+  console.log("Using classic webhook payload format");
   return {
     boardId: event?.boardId,
     itemId: event?.itemId,
-    // The column whose change triggered this — we reuse the same column ID
-    // for dependent items since all items share the same board schema
     columnId: event?.columnId,
   };
 }
