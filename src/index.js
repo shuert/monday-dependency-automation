@@ -2,6 +2,10 @@ require("dotenv").config();
 const express = require("express");
 const { verifyMondaySignature } = require("./verify");
 const { handleStatusChangedToDone } = require("./handler");
+const {
+  createWebhookSubscription,
+  listWebhooks,
+} = require("./mondayClient");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,6 +24,42 @@ app.use((req, res, next) => {
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "monday-dependency-automation" });
+});
+
+// ─── Webhook setup ───────────────────────────────────────────────────────────
+// POST /setup with { "boardId": 123456789 } to register a webhook on a board.
+// monday will immediately send a challenge to /webhook (handled below).
+app.post("/setup", async (req, res) => {
+  const { boardId } = req.body;
+  if (!boardId) {
+    return res.status(400).json({ error: "boardId is required" });
+  }
+
+  const protocol = req.headers["x-forwarded-proto"] || "https";
+  const webhookUrl = `${protocol}://${req.headers.host}/webhook`;
+
+  try {
+    const result = await createWebhookSubscription(boardId, webhookUrl);
+    console.log(`Webhook registered for board ${boardId} → ${webhookUrl}`);
+    res.json({ success: true, boardId, webhookUrl, result });
+  } catch (err) {
+    console.error("Failed to register webhook:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /setup?boardId=123 to list existing webhooks for a board
+app.get("/setup", async (req, res) => {
+  const { boardId } = req.query;
+  if (!boardId) {
+    return res.status(400).json({ error: "boardId query param is required" });
+  }
+  try {
+    const webhooks = await listWebhooks(boardId);
+    res.json({ boardId, webhooks });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── monday challenge handshake ──────────────────────────────────────────────

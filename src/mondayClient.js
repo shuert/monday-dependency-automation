@@ -109,4 +109,52 @@ async function setItemStatus(boardId, itemId, statusColumnId, label) {
   });
 }
 
-module.exports = { getDependentItemIds, getItemStatus, setItemStatus };
+/**
+ * Register a webhook subscription on a board via monday's API.
+ * This sends classic webhook payloads with boardId, itemId, columnId.
+ */
+async function createWebhookSubscription(boardId, webhookUrl) {
+  const mutation = `
+    mutation CreateWebhook($boardId: ID!, $url: String!, $event: WebhookEventType!) {
+      create_webhook(board_id: $boardId, url: $url, event: $event) {
+        id
+        board_id
+      }
+    }
+  `;
+
+  return await mondayRequest(mutation, {
+    boardId: String(boardId),
+    url: webhookUrl,
+    event: "change_column_value",
+  });
+}
+
+/**
+ * List active webhook subscriptions for a board.
+ */
+async function listWebhooks(boardId) {
+  const query = `
+    query GetWebhooks($boardId: [ID!]!) {
+      boards(ids: $boardId) {
+        webhooks {
+          id
+          board_id
+          event
+          config
+        }
+      }
+    }
+  `;
+
+  const data = await mondayRequest(query, { boardId: [String(boardId)] });
+  return data?.boards?.[0]?.webhooks || [];
+}
+
+module.exports = {
+  getDependentItemIds,
+  getItemStatus,
+  setItemStatus,
+  createWebhookSubscription,
+  listWebhooks,
+};

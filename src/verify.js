@@ -2,44 +2,42 @@ const crypto = require("crypto");
 
 /**
  * Verifies that an incoming webhook request was sent by monday.com.
- * monday signs requests with HMAC-SHA256 using your app's Signing Secret.
  *
- * Must be used BEFORE express.json() so the raw body is available.
+ * Supports two auth modes:
+ *   1. Classic webhooks: HMAC-SHA256 via x-monday-signature header
+ *   2. Workflow blocks: JWT via authorization header (logged but allowed)
  */
 function verifyMondaySignature(req, res, next) {
-  console.log("Incoming webhook headers:", JSON.stringify(req.headers, null, 2));
-  console.log("Incoming webhook body (first 500 chars):", req.rawBody?.substring(0, 500));
+  // Classic HMAC signature (API-created webhooks)
+  const signature = req.headers["x-monday-signature"];
 
-  const signature =
-    req.headers["x-monday-signature"] || req.headers["authorization"];
+  if (signature) {
+    const signingSecret = process.env.MONDAY_SIGNING_SECRET;
+    if (!signingSecret) {
+      console.error("MONDAY_SIGNING_SECRET is not set");
+      return res.status(500).json({ error: "Server misconfiguration" });
+    }
 
-  if (!signature) {
-    console.warn("Missing x-monday-signature and authorization headers");
-    return res.status(401).json({ error: "Missing signature" });
-  }
+    const hmac = crypto.createHmac("sha256", signingSecret);
+    hmac.update(req.rawBody);
+    const digest = "sha256=" + hmac.digest("hex");
 
-  // Workflow block calls may use authorization header instead of HMAC
-  if (!req.headers["x-monday-signature"] && req.headers["authorization"]) {
-    console.log("Using authorization header (workflow block mode), skipping HMAC check");
+    if (digest !== signature) {
+      console.warn("Invalid webhook signature");
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+
     return next();
   }
 
-  const signingSecret = process.env.MONDAY_SIGNING_SECRET;
-  if (!signingSecret) {
-    console.error("MONDAY_SIGNING_SECRET is not set");
-    return res.status(500).json({ error: "Server misconfiguration" });
+  // Workflow block calls use an authorization JWT instead
+  if (req.headers["authorization"]) {
+    console.log("Workflow block request (authorization header present)");
+    return next();
   }
 
-  const hmac = crypto.createHmac("sha256", signingSecret);
-  hmac.update(req.rawBody); // rawBody is attached in index.js
-  const digest = "sha256=" + hmac.digest("hex");
-
-  if (digest !== signature) {
-    console.warn("Invalid webhook signature");
-    return res.status(401).json({ error: "Invalid signature" });
-  }
-
-  next();
+  console.warn("No authentication header found on request");
+  return res.status(401).json({ error: "Missing signature" });
 }
 
 module.exports = { verifyMondaySignature };
