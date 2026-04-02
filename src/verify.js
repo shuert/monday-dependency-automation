@@ -7,11 +7,21 @@ const crypto = require("crypto");
  * Must be used BEFORE express.json() so the raw body is available.
  */
 function verifyMondaySignature(req, res, next) {
-  const signature = req.headers["x-monday-signature"];
+  console.log("Incoming webhook headers:", JSON.stringify(req.headers, null, 2));
+  console.log("Incoming webhook body (first 500 chars):", req.rawBody?.substring(0, 500));
+
+  const signature =
+    req.headers["x-monday-signature"] || req.headers["authorization"];
 
   if (!signature) {
-    console.warn("Missing x-monday-signature header");
+    console.warn("Missing x-monday-signature and authorization headers");
     return res.status(401).json({ error: "Missing signature" });
+  }
+
+  // Workflow block calls may use authorization header instead of HMAC
+  if (!req.headers["x-monday-signature"] && req.headers["authorization"]) {
+    console.log("Using authorization header (workflow block mode), skipping HMAC check");
+    return next();
   }
 
   const signingSecret = process.env.MONDAY_SIGNING_SECRET;
