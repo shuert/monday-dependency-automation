@@ -17,16 +17,37 @@ const ACTIVATE_LABEL = "Working on it";
  * @param {object} payload - The parsed webhook payload from monday
  */
 async function handleStatusChangedToDone(payload) {
-  const { boardId, itemId, columnId } = extractPayloadFields(payload);
-
-  if (!boardId || !itemId || !columnId) {
-    console.error("Payload missing required fields", payload);
+  const event = payload?.event;
+  if (!event) {
+    console.log("No event in payload, skipping");
     return;
   }
 
-  console.log(`Item ${itemId} on board ${boardId} changed to Done. Checking dependencies...`);
+  // Only process status column changes (monday type "color" = status column)
+  if (event.columnType && event.columnType !== "color") {
+    console.log(`Ignoring non-status column change: ${event.columnTitle} (${event.columnType})`);
+    return;
+  }
 
-  // 1. Get dependent item IDs from the native Dependency column
+  // Check if the new value is "Done"
+  const newLabel = event.value?.label?.text || event.value?.label;
+  if (newLabel !== DONE_LABEL) {
+    console.log(`Status changed to "${newLabel}", not "${DONE_LABEL}" — skipping`);
+    return;
+  }
+
+  // monday uses "pulseId" for the item ID in classic webhooks
+  const boardId = event.boardId;
+  const itemId = event.pulseId || event.itemId;
+  const columnId = event.columnId;
+
+  if (!boardId || !itemId || !columnId) {
+    console.error("Payload missing required fields (boardId, pulseId/itemId, columnId)");
+    return;
+  }
+
+  console.log(`Item ${itemId} ("${event.pulseName}") on board ${boardId} changed to Done. Checking dependencies...`);
+
   const dependentIds = await getDependentItemIds(itemId);
 
   if (dependentIds.length === 0) {
@@ -36,7 +57,6 @@ async function handleStatusChangedToDone(payload) {
 
   console.log(`Found ${dependentIds.length} dependent item(s): ${dependentIds.join(", ")}`);
 
-  // 2. For each dependent item, check status and conditionally update
   for (const depId of dependentIds) {
     const currentStatus = await getItemStatus(depId, columnId);
     console.log(`  Item ${depId} current status: "${currentStatus}"`);
@@ -50,38 +70,6 @@ async function handleStatusChangedToDone(payload) {
     await setItemStatus(boardId, depId, columnId, ACTIVATE_LABEL);
     console.log(`  ✓ Item ${depId} updated successfully.`);
   }
-}
-
-/**
- * Extracts the fields we need from the monday webhook payload.
- * Supports both formats:
- *   - Classic webhook: payload.event.boardId / itemId / columnId
- *   - Workflow block:  payload.payload.inputFields or inboundFieldValues
- */
-function extractPayloadFields(payload) {
-  // Workflow block format (integration recipe system)
-  const inputFields =
-    payload?.payload?.inputFields ||
-    payload?.payload?.inboundFieldValues ||
-    {};
-
-  if (inputFields.boardId || inputFields.itemId) {
-    console.log("Using workflow block payload format");
-    return {
-      boardId: inputFields.boardId,
-      itemId: inputFields.itemId,
-      columnId: inputFields.columnId,
-    };
-  }
-
-  // Classic webhook format
-  const event = payload?.event || payload;
-  console.log("Using classic webhook payload format");
-  return {
-    boardId: event?.boardId,
-    itemId: event?.itemId,
-    columnId: event?.columnId,
-  };
 }
 
 module.exports = { handleStatusChangedToDone };
