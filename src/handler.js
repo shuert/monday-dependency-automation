@@ -2,6 +2,7 @@ const {
   getSuccessorItemIds,
   getItemStatus,
   setItemStatus,
+  getBoardIdForItem,
 } = require("./mondayClient");
 
 const DONE_LABEL = "Done";
@@ -14,6 +15,47 @@ function pickId(value) {
   if (value == null || value === "") return null;
   if (typeof value === "object" && value.id != null) return String(value.id);
   return String(value);
+}
+
+/**
+ * Status trigger may pass column id as string or inside statusColumnValue JSON.
+ */
+function extractStatusColumnId(columnId, statusColumnValue) {
+  if (columnId != null && columnId !== "") {
+    const c = pickId(columnId);
+    if (c && c !== "[object Object]") return c;
+  }
+  const v = statusColumnValue;
+  if (v == null) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    if (v.column_id != null) return String(v.column_id);
+    if (v.columnId != null) return String(v.columnId);
+    if (v.column?.id != null) return String(v.column.id);
+    if (v.id != null && typeof v.id === "string" && !v.label) return String(v.id);
+  }
+  return null;
+}
+
+/**
+ * Trigger outputs (new infra): itemId, item, statusColumnValue — not boardId.
+ */
+function extractItemIdFromRecipe(raw) {
+  return (
+    pickId(raw.itemId) ||
+    pickId(raw.pulseId) ||
+    pickId(raw.item?.id) ||
+    (typeof raw.item === "number" || typeof raw.item === "string" ? pickId(raw.item) : null)
+  );
+}
+
+function extractBoardIdFromRecipe(raw) {
+  return (
+    pickId(raw.boardId) ||
+    pickId(raw.item?.board_id) ||
+    pickId(raw.item?.boardId) ||
+    pickId(raw.item?.board?.id)
+  );
 }
 
 /**
@@ -102,9 +144,14 @@ async function handleStatusChangedToDone(payload) {
 }
 
 /**
- * Integration recipe custom action: JWT verified; use shortLivedToken for API.
- * Trigger should be "status changes to Done"; map trigger outputs → action inputs:
- *   boardId, itemId (or pulseId), columnId
+ * Integration / automations block: JWT + shortLivedToken.
+ * "When status changes" trigger exposes: groupId, itemId, userId, statusColumnValue,
+ * previousStatusColumnValue, item — not boardId. We resolve board via GraphQL from itemId.
+ *
+ * Map action inputs from trigger outputs:
+ *   itemId ← itemId (or item)
+ *   columnId ← statusColumnValue (or a text field wired to column id if monday sends label-only JSON)
+ *   boardId ← optional; omitted → fetched with getBoardIdForItem
  */
 async function handleIntegrationRecipeAction(body, req) {
   const token = req.mondayJwt?.shortLivedToken;
@@ -119,17 +166,37 @@ async function handleIntegrationRecipeAction(body, req) {
     ...(typeof p.inputFields === "object" ? p.inputFields : {}),
   };
 
-  const boardId = pickId(raw.boardId);
-  const itemId = pickId(raw.itemId ?? raw.pulseId);
-  const columnId = pickId(raw.columnId);
+  const itemId = extractItemIdFromRecipe(raw);
+  let boardId = extractBoardIdFromRecipe(raw);
+  const columnId = extractStatusColumnId(raw.columnId, raw.statusColumnValue);
 
-  if (!boardId || !itemId || !columnId) {
+  if (!itemId) {
     console.error(
-      "Recipe action missing boardId / itemId / columnId. In Developer Center → Workflow Block → add input fields (Trigger Output): boardId, itemId, columnId and wire them in the recipe.",
+      "Recipe action missing itemId. Map trigger output itemId (or item) to your action input.",
       "Received keys:",
       Object.keys(raw)
     );
     return;
+  }
+
+  if (!columnId) {
+    console.error(
+      "Recipe action missing status column id. Map trigger output statusColumnValue to columnId input, or wire column id if your builder exposes it.",
+      "statusColumnValue sample:",
+      typeof raw.statusColumnValue === "object"
+        ? JSON.stringify(raw.statusColumnValue).slice(0, 300)
+        : raw.statusColumnValue
+    );
+    return;
+  }
+
+  if (!boardId) {
+    boardId = await getBoardIdForItem(itemId, token);
+    if (!boardId) {
+      console.error("Could not resolve boardId for item", itemId);
+      return;
+    }
+    console.log(`Resolved boardId ${boardId} from item ${itemId}`);
   }
 
   await activateSuccessorsForCompletedItem({

@@ -168,6 +168,24 @@ async function findOurWebhooks(boardId, ourHost) {
   }
 }
 
+/**
+ * Resolve board id for an item (used when trigger does not expose boardId).
+ */
+async function getBoardIdForItem(itemId, authToken) {
+  const query = `
+    query BoardForItem($id: [ID!]!) {
+      items(ids: $id) {
+        board {
+          id
+        }
+      }
+    }
+  `;
+  const data = await mondayRequest(query, { id: [String(itemId)] }, authToken);
+  const id = data?.items?.[0]?.board?.id;
+  return id != null ? String(id) : null;
+}
+
 module.exports = {
   getSuccessorItemIds,
   getItemStatus,
@@ -175,4 +193,5 @@ module.exports = {
   createWebhookSubscription,
   deleteWebhookSubscription,
   findOurWebhooks,
+  getBoardIdForItem,
 };
