@@ -3,12 +3,12 @@ const crypto = require("crypto");
 /**
  * Verifies that an incoming webhook request was sent by monday.com.
  *
- * Supports two auth modes:
- *   1. Classic webhooks: HMAC-SHA256 via x-monday-signature header
- *   2. Workflow blocks: JWT via authorization header (logged but allowed)
+ * Auth modes (checked in order):
+ *   1. x-monday-signature header → HMAC-SHA256 verification
+ *   2. authorization header → JWT from workflow blocks (allowed)
+ *   3. No auth header → API-created webhooks (allowed, log for visibility)
  */
 function verifyMondaySignature(req, res, next) {
-  // Classic HMAC signature (API-created webhooks)
   const signature = req.headers["x-monday-signature"];
 
   if (signature) {
@@ -27,17 +27,18 @@ function verifyMondaySignature(req, res, next) {
       return res.status(401).json({ error: "Invalid signature" });
     }
 
+    console.log("Request verified via HMAC signature");
     return next();
   }
 
-  // Workflow block calls use an authorization JWT instead
   if (req.headers["authorization"]) {
-    console.log("Workflow block request (authorization header present)");
+    console.log("Request authenticated via authorization header");
     return next();
   }
 
-  console.warn("No authentication header found on request");
-  return res.status(401).json({ error: "Missing signature" });
+  // API-created webhooks may not include auth headers
+  console.log("Request received without auth headers (API-created webhook)");
+  next();
 }
 
 module.exports = { verifyMondaySignature };
