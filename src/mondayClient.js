@@ -144,24 +144,43 @@ async function createWebhookSubscription(boardId, webhookUrl) {
 }
 
 /**
- * List active webhook subscriptions for a board.
+ * Delete a webhook subscription by ID.
  */
-async function listWebhooks(boardId) {
+async function deleteWebhookSubscription(webhookId) {
+  const mutation = `
+    mutation DeleteWebhook($id: ID!) {
+      delete_webhook(id: $id) {
+        id
+      }
+    }
+  `;
+  return await mondayRequest(mutation, { id: String(webhookId) });
+}
+
+/**
+ * Find all webhook subscriptions for a board that point to our /webhook URL.
+ * Uses the items_page approach since boards.webhooks may not be available.
+ */
+async function findOurWebhooks(boardId, ourHost) {
   const query = `
-    query GetWebhooks($boardId: [ID!]!) {
-      boards(ids: $boardId) {
-        webhooks {
-          id
-          board_id
-          event
-          config
-        }
+    query GetWebhooks($boardId: ID!) {
+      webhooks(board_id: $boardId) {
+        id
+        board_id
+        event
+        config
       }
     }
   `;
 
-  const data = await mondayRequest(query, { boardId: [String(boardId)] });
-  return data?.boards?.[0]?.webhooks || [];
+  try {
+    const data = await mondayRequest(query, { boardId: String(boardId) });
+    const all = data?.webhooks || [];
+    if (!ourHost) return all;
+    return all.filter((w) => w.config?.includes(ourHost));
+  } catch {
+    return [];
+  }
 }
 
 module.exports = {
@@ -169,5 +188,6 @@ module.exports = {
   getItemStatus,
   setItemStatus,
   createWebhookSubscription,
-  listWebhooks,
+  deleteWebhookSubscription,
+  findOurWebhooks,
 };

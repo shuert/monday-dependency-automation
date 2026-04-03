@@ -1,10 +1,12 @@
 require("dotenv").config();
 const express = require("express");
+const path = require("path");
 const { verifyMondaySignature } = require("./verify");
 const { handleStatusChangedToDone } = require("./handler");
 const {
   createWebhookSubscription,
-  listWebhooks,
+  deleteWebhookSubscription,
+  findOurWebhooks,
 } = require("./mondayClient");
 
 const app = express();
@@ -16,19 +18,26 @@ app.use((req, res, next) => {
   req.on("data", (chunk) => (data += chunk));
   req.on("end", () => {
     req.rawBody = data;
-    req.body = data ? JSON.parse(data) : {};
+    try {
+      req.body = data ? JSON.parse(data) : {};
+    } catch {
+      req.body = {};
+    }
     next();
   });
 });
+
+// Serve the board view static page
+app.use("/view", express.static(path.join(__dirname, "public")));
 
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "monday-dependency-automation" });
 });
 
-// ─── Webhook setup ───────────────────────────────────────────────────────────
-// POST /setup with { "boardId": 123456789 } to register a webhook on a board.
-// monday will immediately send a challenge to /webhook (handled below).
+// ─── Webhook management API ─────────────────────────────────────────────────
+
+// POST /setup — enable automation on a board
 app.post("/setup", async (req, res) => {
   const { boardId } = req.body;
   if (!boardId) {
@@ -41,30 +50,56 @@ app.post("/setup", async (req, res) => {
   try {
     const result = await createWebhookSubscription(boardId, webhookUrl);
     console.log(`Webhook registered for board ${boardId} → ${webhookUrl}`);
-    res.json({ success: true, boardId, webhookUrl, result });
+    res.json({ success: true, enabled: true, boardId, webhookUrl, result });
   } catch (err) {
     console.error("Failed to register webhook:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /setup?boardId=123 to list existing webhooks for a board
-app.get("/setup", async (req, res) => {
+// GET /setup/status?boardId=123 — check if automation is enabled
+app.get("/setup/status", async (req, res) => {
   const { boardId } = req.query;
   if (!boardId) {
     return res.status(400).json({ error: "boardId query param is required" });
   }
   try {
-    const webhooks = await listWebhooks(boardId);
-    res.json({ boardId, webhooks });
+    const host = req.headers.host;
+    const webhooks = await findOurWebhooks(boardId, host);
+    res.json({ boardId, enabled: webhooks.length > 0, webhooks });
   } catch (err) {
+    res.json({ boardId, enabled: false, webhooks: [] });
+  }
+});
+
+// DELETE /setup — disable automation on a board
+app.delete("/setup", async (req, res) => {
+  const { boardId } = req.body;
+  if (!boardId) {
+    return res.status(400).json({ error: "boardId is required" });
+  }
+
+  try {
+    const host = req.headers.host;
+    const webhooks = await findOurWebhooks(boardId, host);
+
+    if (webhooks.length === 0) {
+      return res.json({ success: true, enabled: false, message: "No webhooks found" });
+    }
+
+    for (const wh of webhooks) {
+      await deleteWebhookSubscription(wh.id);
+      console.log(`Webhook ${wh.id} deleted for board ${boardId}`);
+    }
+
+    res.json({ success: true, enabled: false, removed: webhooks.length });
+  } catch (err) {
+    console.error("Failed to remove webhooks:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ─── monday challenge handshake ──────────────────────────────────────────────
-// When you register a webhook URL in monday, it sends a challenge request
-// that must be echoed back immediately to verify ownership of the endpoint.
 app.post("/webhook", (req, res, next) => {
   if (req.body?.challenge) {
     console.log("Responding to monday challenge handshake");
@@ -78,10 +113,8 @@ app.post(
   "/webhook",
   verifyMondaySignature,
   async (req, res) => {
-    // Acknowledge immediately — monday expects a fast 200 response
     res.json({ status: "received" });
 
-    // Process asynchronously so we don't block the response
     try {
       await handleStatusChangedToDone(req.body);
     } catch (err) {

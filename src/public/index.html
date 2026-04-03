@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dependency Automation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #fff;
+      color: #323338;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .description {
+      font-size: 14px;
+      color: #676879;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+
+    .status-card {
+      border: 1px solid #d0d4e4;
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .status-label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .status-indicator.on { background: #00ca72; }
+    .status-indicator.off { background: #d0d4e4; }
+
+    .toggle-btn {
+      padding: 8px 20px;
+      border-radius: 4px;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .toggle-btn.enable {
+      background: #0073ea;
+      color: #fff;
+    }
+    .toggle-btn.enable:hover { background: #0060c2; }
+
+    .toggle-btn.disable {
+      background: #e6e9ef;
+      color: #323338;
+    }
+    .toggle-btn.disable:hover { background: #d0d4e4; }
+
+    .toggle-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .info {
+      font-size: 12px;
+      color: #676879;
+      line-height: 1.5;
+    }
+
+    .error {
+      color: #d83a52;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #676879;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Dependency Automation</h1>
+    <p class="description">
+      When a task is marked <strong>Done</strong>, automatically set dependent
+      tasks to <strong>Working on it</strong> (unless already Done).
+    </p>
+
+    <div id="loading" class="loading">Loading...</div>
+
+    <div id="content" style="display:none">
+      <div class="status-card">
+        <div class="status-label">
+          <span id="indicator" class="status-indicator off"></span>
+          <span id="statusText">Disabled</span>
+        </div>
+        <button id="toggleBtn" class="toggle-btn enable" onclick="toggle()">
+          Enable
+        </button>
+      </div>
+      <p class="info">
+        This applies to all items on this board that have a Dependency column.
+        Status labels must match exactly: "Done" triggers the automation,
+        dependents are set to "Working on it".
+      </p>
+      <p id="errorMsg" class="error" style="display:none"></p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/monday-sdk-js/dist/main.js"></script>
+  <script>
+    const monday = window.mondaySdk();
+    let boardId = null;
+    let isEnabled = false;
+
+    const API_BASE = window.location.origin;
+
+    async function init() {
+      try {
+        const context = await monday.get("context");
+        boardId = context.data.boardId || context.data.boardIds?.[0];
+
+        if (!boardId) {
+          showError("Could not determine board ID.");
+          return;
+        }
+
+        await checkStatus();
+      } catch (err) {
+        showError("Failed to initialize: " + err.message);
+      }
+    }
+
+    async function checkStatus() {
+      try {
+        const res = await fetch(`${API_BASE}/setup/status?boardId=${boardId}`);
+        const data = await res.json();
+        isEnabled = data.enabled;
+        render();
+      } catch (err) {
+        showError("Failed to check status: " + err.message);
+      }
+    }
+
+    async function toggle() {
+      const btn = document.getElementById("toggleBtn");
+      btn.disabled = true;
+      hideError();
+
+      try {
+        if (isEnabled) {
+          const res = await fetch(`${API_BASE}/setup`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ boardId }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          isEnabled = false;
+        } else {
+          const res = await fetch(`${API_BASE}/setup`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ boardId }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          isEnabled = true;
+        }
+        render();
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function render() {
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("content").style.display = "block";
+
+      const indicator = document.getElementById("indicator");
+      const statusText = document.getElementById("statusText");
+      const btn = document.getElementById("toggleBtn");
+
+      if (isEnabled) {
+        indicator.className = "status-indicator on";
+        statusText.textContent = "Enabled";
+        btn.textContent = "Disable";
+        btn.className = "toggle-btn disable";
+      } else {
+        indicator.className = "status-indicator off";
+        statusText.textContent = "Disabled";
+        btn.textContent = "Enable";
+        btn.className = "toggle-btn enable";
+      }
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("errorMsg");
+      el.textContent = msg;
+      el.style.display = "block";
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("content").style.display = "block";
+    }
+
+    function hideError() {
+      document.getElementById("errorMsg").style.display = "none";
+    }
+
+    init();
+  </script>
+</body>
+</html>
