@@ -1,5 +1,5 @@
 const {
-  getDependentItemIds,
+  getSuccessorItemIds,
   getItemStatus,
   setItemStatus,
 } = require("./mondayClient");
@@ -46,18 +46,19 @@ async function handleStatusChangedToDone(payload) {
     return;
   }
 
-  console.log(`Item ${itemId} ("${event.pulseName}") on board ${boardId} changed to Done. Checking dependencies...`);
+  console.log(`Item ${itemId} ("${event.pulseName}") on board ${boardId} changed to Done. Finding successors...`);
 
-  const dependentIds = await getDependentItemIds(itemId);
+  // Find items whose Dependency column includes this completed item
+  const successorIds = await getSuccessorItemIds(boardId, itemId);
 
-  if (dependentIds.length === 0) {
-    console.log(`No dependent items found for item ${itemId}.`);
+  if (successorIds.length === 0) {
+    console.log(`No successor items found for item ${itemId}.`);
     return;
   }
 
-  console.log(`Found ${dependentIds.length} dependent item(s): ${dependentIds.join(", ")}`);
+  console.log(`Found ${successorIds.length} successor(s): ${successorIds.join(", ")}`);
 
-  for (const depId of dependentIds) {
+  for (const depId of successorIds) {
     const currentStatus = await getItemStatus(depId, columnId);
     console.log(`  Item ${depId} current status: "${currentStatus}"`);
 

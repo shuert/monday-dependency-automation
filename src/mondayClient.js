@@ -27,34 +27,47 @@ async function mondayRequest(query, variables = {}) {
 }
 
 /**
- * Get the dependent item IDs from the native Dependency column of an item.
- * Returns an array of item ID strings.
+ * Find items that DEPEND ON the given item (successors).
+ *
+ * monday's Dependency column stores predecessors: if Item B depends on
+ * Item A, then Item B's dependency column contains Item A's ID.
+ *
+ * To find successors of a completed item, we scan all items on the same
+ * board and return those whose dependency column includes the completed
+ * item's ID.
  */
-async function getDependentItemIds(itemId) {
+async function getSuccessorItemIds(boardId, completedItemId) {
   const query = `
-    query GetDependencies($itemId: [ID!]!) {
-      items(ids: $itemId) {
-        column_values(types: dependency) {
-          ... on DependencyValue {
-            linked_item_ids
+    query GetBoardDependencies($boardId: [ID!]!) {
+      boards(ids: $boardId) {
+        items_page(limit: 500) {
+          items {
+            id
+            column_values(types: dependency) {
+              ... on DependencyValue {
+                linked_item_ids
+              }
+            }
           }
         }
       }
     }
   `;
 
-  const data = await mondayRequest(query, { itemId: [String(itemId)] });
-  const item = data?.items?.[0];
-  if (!item) return [];
+  const data = await mondayRequest(query, { boardId: [String(boardId)] });
+  const items = data?.boards?.[0]?.items_page?.items || [];
+  const completedId = String(completedItemId);
 
-  // Collect all linked IDs across all dependency columns (usually just one)
-  const ids = [];
-  for (const col of item.column_values) {
-    if (col.linked_item_ids) {
-      ids.push(...col.linked_item_ids);
+  const successors = [];
+  for (const item of items) {
+    for (const col of item.column_values) {
+      if (col.linked_item_ids?.includes(completedId)) {
+        successors.push(item.id);
+        break;
+      }
     }
   }
-  return ids;
+  return successors;
 }
 
 /**
@@ -152,7 +165,7 @@ async function listWebhooks(boardId) {
 }
 
 module.exports = {
-  getDependentItemIds,
+  getSuccessorItemIds,
   getItemStatus,
   setItemStatus,
   createWebhookSubscription,
