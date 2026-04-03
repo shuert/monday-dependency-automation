@@ -4,15 +4,21 @@ const MONDAY_API_URL = "https://api.monday.com/v2";
 
 /**
  * Execute a GraphQL query/mutation against the monday.com API.
+ * @param {string} authToken - Optional. User short-lived token from integration JWT, or defaults to MONDAY_API_TOKEN.
  */
-async function mondayRequest(query, variables = {}) {
+async function mondayRequest(query, variables = {}, authToken) {
+  const token = authToken || process.env.MONDAY_API_TOKEN;
+  if (!token) {
+    throw new Error("No monday API token (set MONDAY_API_TOKEN or pass shortLivedToken)");
+  }
+
   const response = await axios.post(
     MONDAY_API_URL,
     { query, variables },
     {
       headers: {
         "Content-Type": "application/json",
-        Authorization: process.env.MONDAY_API_TOKEN,
+        Authorization: token,
         "API-Version": "2024-01",
       },
     }
@@ -26,17 +32,7 @@ async function mondayRequest(query, variables = {}) {
   return response.data.data;
 }
 
-/**
- * Find items that DEPEND ON the given item (successors).
- *
- * monday's Dependency column stores predecessors: if Item B depends on
- * Item A, then Item B's dependency column contains Item A's ID.
- *
- * To find successors of a completed item, we scan all items on the same
- * board and return those whose dependency column includes the completed
- * item's ID.
- */
-async function getSuccessorItemIds(boardId, completedItemId) {
+async function getSuccessorItemIds(boardId, completedItemId, authToken) {
   const query = `
     query GetBoardDependencies($boardId: [ID!]!) {
       boards(ids: $boardId) {
@@ -54,7 +50,7 @@ async function getSuccessorItemIds(boardId, completedItemId) {
     }
   `;
 
-  const data = await mondayRequest(query, { boardId: [String(boardId)] });
+  const data = await mondayRequest(query, { boardId: [String(boardId)] }, authToken);
   const items = data?.boards?.[0]?.items_page?.items || [];
   const completedId = String(completedItemId);
 
@@ -70,11 +66,7 @@ async function getSuccessorItemIds(boardId, completedItemId) {
   return successors;
 }
 
-/**
- * Get the current status label of an item's status column.
- * Returns the label string (e.g. "Done", "Working on it") or null.
- */
-async function getItemStatus(itemId, statusColumnId) {
+async function getItemStatus(itemId, statusColumnId, authToken) {
   const query = `
     query GetItemStatus($itemId: [ID!]!, $columnId: [String!]!) {
       items(ids: $itemId) {
@@ -87,20 +79,20 @@ async function getItemStatus(itemId, statusColumnId) {
     }
   `;
 
-  const data = await mondayRequest(query, {
-    itemId: [String(itemId)],
-    columnId: [statusColumnId],
-  });
+  const data = await mondayRequest(
+    query,
+    {
+      itemId: [String(itemId)],
+      columnId: [statusColumnId],
+    },
+    authToken
+  );
 
   const label = data?.items?.[0]?.column_values?.[0]?.label;
   return label ?? null;
 }
 
-/**
- * Change the status of an item to a given label value.
- * monday requires the column value to be set as JSON: { "label": "..." }
- */
-async function setItemStatus(boardId, itemId, statusColumnId, label) {
+async function setItemStatus(boardId, itemId, statusColumnId, label, authToken) {
   const mutation = `
     mutation SetStatus($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {
       change_column_value(
@@ -114,18 +106,18 @@ async function setItemStatus(boardId, itemId, statusColumnId, label) {
     }
   `;
 
-  await mondayRequest(mutation, {
-    boardId: String(boardId),
-    itemId: String(itemId),
-    columnId: statusColumnId,
-    value: JSON.stringify({ label }),
-  });
+  await mondayRequest(
+    mutation,
+    {
+      boardId: String(boardId),
+      itemId: String(itemId),
+      columnId: statusColumnId,
+      value: JSON.stringify({ label }),
+    },
+    authToken
+  );
 }
 
-/**
- * Register a webhook subscription on a board via monday's API.
- * This sends classic webhook payloads with boardId, itemId, columnId.
- */
 async function createWebhookSubscription(boardId, webhookUrl) {
   const mutation = `
     mutation CreateWebhook($boardId: ID!, $url: String!, $event: WebhookEventType!) {
@@ -143,9 +135,6 @@ async function createWebhookSubscription(boardId, webhookUrl) {
   });
 }
 
-/**
- * Delete a webhook subscription by ID.
- */
 async function deleteWebhookSubscription(webhookId) {
   const mutation = `
     mutation DeleteWebhook($id: ID!) {
@@ -157,10 +146,6 @@ async function deleteWebhookSubscription(webhookId) {
   return await mondayRequest(mutation, { id: String(webhookId) });
 }
 
-/**
- * Find all webhook subscriptions for a board that point to our /webhook URL.
- * Uses the items_page approach since boards.webhooks may not be available.
- */
 async function findOurWebhooks(boardId, ourHost) {
   const query = `
     query GetWebhooks($boardId: ID!) {

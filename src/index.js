@@ -2,7 +2,11 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const { verifyMondaySignature } = require("./verify");
-const { handleStatusChangedToDone } = require("./handler");
+const {
+  handleStatusChangedToDone,
+  handleIntegrationRecipeAction,
+  isIntegrationActionPayload,
+} = require("./handler");
 const {
   createWebhookSubscription,
   deleteWebhookSubscription,
@@ -116,7 +120,11 @@ app.post(
     res.json({ status: "received" });
 
     try {
-      await handleStatusChangedToDone(req.body);
+      if (isIntegrationActionPayload(req.body)) {
+        await handleIntegrationRecipeAction(req.body, req);
+      } else {
+        await handleStatusChangedToDone(req.body);
+      }
     } catch (err) {
       console.error("Error processing webhook:", err.message);
     }
